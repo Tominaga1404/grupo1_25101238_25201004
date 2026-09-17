@@ -9,5 +9,4 @@ Docente: Prof. Moises Silva de Sousa
 
 ## 📁 Estrutura do Repositório
 * `sql/bd_locadora.sql`: Script DDL e DML pronto para execução no MySQL.
-* `relatorio_ieee.pdf`: Artigo em formato IEEE contendo Dicionário de Dados, MER/DER, Normalização (1FN a 3FN) e análise das consultas.
-* `prints/`: Evidências das consultas SQL executadas no MySQL Workbench.
+* `IEEE_Conference_Template.pdf`: Artigo em formato IEEE contendo Dicionário de Dados, MER/DER, Normalização (1FN a 3FN) e análise das consultas.
