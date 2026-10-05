@@ -1,7 +1,13 @@
--- Views
--- Lista as locações que estão em andamento
+USE bd_locadora;
 
-CREATE VIEW vw_locacoes_ativas AS
+-- ====================================================================
+-- PARTE 1: VIEWS E ÍNDICES
+-- ====================================================================
+
+-- 1.1: Agregação e Abstração com Views
+
+-- View 1: Locações ativas (em andamento)
+CREATE OR REPLACE VIEW vw_locacoes_ativas AS
 SELECT 
     l.id_locacao,
     c.nome AS cliente,
@@ -14,9 +20,8 @@ JOIN cliente c ON l.id_cliente = c.id_cliente
 JOIN veiculo v ON l.id_veiculo = v.id_veiculo
 WHERE l.data_real_devolucao IS NULL;
 
--- Exibe todos os veículos prontos para locação
-
-CREATE VIEW vw_veiculos_disponiveis AS
+-- View 2: Veículos disponíveis para locação
+CREATE OR REPLACE VIEW vw_veiculos_disponiveis AS
 SELECT 
     v.id_veiculo,
     v.modelo,
@@ -28,9 +33,8 @@ FROM veiculo v
 JOIN categoria c ON v.id_categoria = c.id_categoria
 WHERE v.status = 'Disponível';
 
--- Soma o valor total das locações finalizadas
-
-CREATE VIEW vw_faturamento_mensal AS
+-- View 3: Faturamento agrupado por mês/ano e filial de retirada
+CREATE OR REPLACE VIEW vw_faturamento_mensal AS
 SELECT 
     YEAR(l.data_retirada) AS ano,
     MONTH(l.data_retirada) AS mes,
@@ -42,82 +46,80 @@ JOIN filial f ON l.id_filial_retirada = f.id_filial
 WHERE l.valor_total IS NOT NULL
 GROUP BY YEAR(l.data_retirada), MONTH(l.data_retirada), f.id_filial, f.nome_filial;
 
--- Consultas
--- Para ver todas as locações ativas:
-SELECT * FROM vw_locacoes_ativas;
 
--- Para ver apenas os veículos da categoria SUV que estão disponíveis:
-SELECT * FROM vw_veiculos_disponiveis 
-WHERE nome_categoria = 'SUV';
+-- 1.2: Análise de Execução e Criação de Índices
 
--- Para ver o faturamento ordenado do mais recente para o mais antigo:
-SELECT * FROM vw_faturamento_mensal 
-ORDER BY ano DESC, mes DESC;
+-- Consulta A: Busca por CPF
+-- [Antes do Índice] (Print do EXPLAIN: type = ALL)
+EXPLAIN SELECT * FROM cliente WHERE cpf = '11122233344';
 
--- Consulta A: Busca de cliente por número de CPF (antes do índice)
-SELECT * FROM cliente WHERE cpf = '11122233344';
-
--- Índice
+-- Criação do Índice A
 CREATE INDEX idx_cliente_cpf ON cliente(cpf);
 
--- Consulta A: Busca de cliente por número de CPF (depois do índice)
-SELECT * FROM cliente WHERE cpf = '11122233344';
+-- [Depois do Índice] (Print do EXPLAIN: type = const / ref)
+EXPLAIN SELECT * FROM cliente WHERE cpf = '11122233344';
 
--- Consulta B: Busca de locações filtradas por intervalo de datas de retirada (antes do índice)
-SELECT * FROM locacao 
+
+-- Consulta B: Filtro por intervalo de datas de retirada
+-- [Antes do Índice] (Print do EXPLAIN: type = ALL)
+EXPLAIN SELECT * FROM locacao 
 WHERE data_retirada BETWEEN '2026-08-01 00:00:00' AND '2026-08-31 23:59:59';
 
--- Índice
+-- Criação do Índice B
 CREATE INDEX idx_locacao_data_retirada ON locacao(data_retirada);
 
--- Consulta B: Busca de locações filtradas por intervalo de datas de retirada (depois do índice)
-SELECT * FROM locacao 
+-- [Depois do Índice] (Print do EXPLAIN: type = range)
+EXPLAIN SELECT * FROM locacao 
 WHERE data_retirada BETWEEN '2026-08-01 00:00:00' AND '2026-08-31 23:59:59';
 
--- Consulta C: Filtro de veículos por categoria (antes do índice)
-SELECT * FROM veiculo WHERE id_categoria = 3;
 
--- Índice
+-- Consulta C: Filtro de veículos por categoria
+-- [Antes do Índice] (Print do EXPLAIN: type = ALL)
+EXPLAIN SELECT * FROM veiculo WHERE id_categoria = 3;
+
+-- Criação do Índice C
 CREATE INDEX idx_veiculo_categoria ON veiculo(id_categoria);
 
--- Consulta C: Filtro de veículos por categoria (depois do índice)
-SELECT * FROM veiculo WHERE id_categoria = 3;
+-- [Depois do Índice] (Print do EXPLAIN: type = ref)
+EXPLAIN SELECT * FROM veiculo WHERE id_categoria = 3;
 
--- Pergunta de reflexão (incluir no relatório)
--- Em que situações a presença de múltiplos índices pode prejudicar o desempenho do banco de dados (ex: tabelas com alta taxa de INSERT, UPDATE ou DELETE)?
--- A presença de muitos índices pode prejudicar o desempenho em tabelas com muitas operações de escrita (INSERT, UPDATE e DELETE), por causa do custo de 
--- manutenção das árvores (B-Trees), pela geração da contenção de I/O e alto consumo de processador e pelo desperdício de espaço em disco
 
--- Triggers
+-- ====================================================================
+-- PARTE 2: TRIGGERS, PROCEDURES E FUNCTIONS
+-- ====================================================================
+
+-- 2.1: Automação e Auditoria com Triggers
 
 DELIMITER //
 
--- Gatilho 1: Altera o status para 'Alugado' ao inserir uma nova locação
+-- Trigger 1: Atualiza status para 'locado' na abertura da locação
+DROP TRIGGER IF EXISTS trg_locacao_insert_veiculo //
 CREATE TRIGGER trg_locacao_insert_veiculo
 AFTER INSERT ON locacao
 FOR EACH ROW
 BEGIN
     UPDATE veiculo 
-    SET status = 'Alugado' 
+    SET status = 'locado' 
     WHERE id_veiculo = NEW.id_veiculo;
-END//
+END //
 
--- Gatilho 2: Altera o status para 'Disponível' quando a devolução é realizada
+-- Trigger 2: Restaura status para 'Disponível' no encerramento da locação
+DROP TRIGGER IF EXISTS trg_locacao_update_veiculo //
 CREATE TRIGGER trg_locacao_update_veiculo
 AFTER UPDATE ON locacao
 FOR EACH ROW
 BEGIN
-    -- Verifica se a locação foi encerrada (antes nula e agora preenchida)
     IF OLD.data_real_devolucao IS NULL AND NEW.data_real_devolucao IS NOT NULL THEN
         UPDATE veiculo 
         SET status = 'Disponível' 
         WHERE id_veiculo = NEW.id_veiculo;
     END IF;
-END//
+END //
 
 DELIMITER ;
 
--- Tabela de Auditoria
+-- Estrutura da Tabela de Auditoria
+DROP TABLE IF EXISTS log_locacao;
 CREATE TABLE log_locacao (
     id_log INT PRIMARY KEY AUTO_INCREMENT,
     id_locacao INT NOT NULL,
@@ -129,9 +131,10 @@ CREATE TABLE log_locacao (
     data_alteracao DATETIME NOT NULL
 );
 
--- Trigger da Auditoria 
 DELIMITER //
 
+-- Trigger de Auditoria para registrar alterações de valor ou finalização
+DROP TRIGGER IF EXISTS trg_locacao_audit //
 CREATE TRIGGER trg_locacao_audit
 AFTER UPDATE ON locacao
 FOR EACH ROW
@@ -139,21 +142,11 @@ BEGIN
     DECLARE v_status_antigo VARCHAR(30);
     DECLARE v_status_novo VARCHAR(30);
     
-    -- Define o status lógico anterior com base na data de devolução
-    IF OLD.data_real_devolucao IS NULL THEN
-        SET v_status_antigo = 'Ativa';
-    ELSE
-        SET v_status_antigo = 'Finalizada';
-    END IF;
-    
-    -- Define o status lógico novo com base na data de devolução
-    IF NEW.data_real_devolucao IS NULL THEN
-        SET v_status_novo = 'Ativa';
-    ELSE
-        SET v_status_novo = 'Finalizada';
-    END IF;
+    -- Determina status lógico anterior e atual
+    SET v_status_antigo = IF(OLD.data_real_devolucao IS NULL, 'Aberta', 'Finalizada');
+    SET v_status_novo   = IF(NEW.data_real_devolucao IS NULL, 'Aberta', 'Finalizada');
 
-    -- Registra no log apenas se houver alteração no valor total ou no status lógico
+    -- Registra apenas se houver mudança de valor ou status de encerramento
     IF (OLD.valor_total <=> NEW.valor_total) = 0 OR (v_status_antigo <> v_status_novo) THEN
         INSERT INTO log_locacao (
             id_locacao, 
@@ -173,15 +166,17 @@ BEGIN
             NOW()
         );
     END IF;
-END//
+END //
 
 DELIMITER ;
 
--- Procedures
 
--- Automatiza o processo de abertura de uma nova locação
+-- 2.2: Stored Procedures e Functions
+
 DELIMITER //
 
+-- Procedure para abertura atômica de nova locação
+DROP PROCEDURE IF EXISTS sp_abrir_locacao //
 CREATE PROCEDURE sp_abrir_locacao (
     IN p_id_cliente INT,
     IN p_id_veiculo INT,
@@ -193,30 +188,29 @@ BEGIN
     DECLARE v_valor_diaria DECIMAL(8,2);
     DECLARE v_valor_total DECIMAL(10,2);
 
-    -- 1. Valida se o veículo está disponível
+    -- 1. Validação de disponibilidade do veículo
     SELECT status INTO v_status 
     FROM veiculo 
     WHERE id_veiculo = p_id_veiculo;
 
     IF v_status IS NULL THEN
         SIGNAL SQLSTATE '45000' 
-        SET MESSAGE_TEXT = 'Erro: Veículo não encontrado.';
+        SET MESSAGE_TEXT = 'Erro: Veículo informado não encontrado.';
     ELSEIF v_status <> 'Disponível' THEN
         SIGNAL SQLSTATE '45000' 
         SET MESSAGE_TEXT = 'Erro: O veículo selecionado não está disponível para locação.';
     END IF;
 
-    -- 2. Busca a taxa diária associada à categoria do veículo
+    -- 2. Busca da diária da categoria
     SELECT c.valor_diaria INTO v_valor_diaria
     FROM veiculo v
     JOIN categoria c ON v.id_categoria = c.id_categoria
     WHERE v.id_veiculo = p_id_veiculo;
 
-    -- 3. Calcula o valor total da locação
+    -- 3. Cálculo do valor estimado
     SET v_valor_total = v_valor_diaria * p_dias_locacao;
 
-    -- 4. Realiza o INSERT na tabela de locações
-    -- (Definimos a filial de retirada e devolução inicialmente como a mesma informada)
+    -- 4. Inserção na tabela de locações
     INSERT INTO locacao (
         data_retirada, 
         data_prevista_devolucao, 
@@ -237,20 +231,11 @@ BEGIN
         p_id_filial
     );
 
-    SELECT 'Locação aberta com sucesso!' AS mensagem, v_valor_total AS valor_estimado;
-END//
+    SELECT 'Locação aberta com sucesso!' AS status, LAST_INSERT_ID() AS id_locacao, v_valor_total AS total_estimado;
+END //
 
-DELIMITER ;
-
--- Chamada da Procedure
--- Abre uma locação para o cliente 2, veículo 2, na filial 1, por 4 dias
-CALL sp_abrir_locacao(2, 2, 1, 4);
-
--- Function
--- Calcula o valor da multa por atraso na devolução de um veículo
-
-DELIMITER //
-
+-- Function para cálculo de multa por atraso
+DROP FUNCTION IF EXISTS fn_calcula_multa //
 CREATE FUNCTION fn_calcula_multa (
     p_id_locacao INT, 
     p_taxa_diaria_multa DECIMAL(8,2)
@@ -263,34 +248,26 @@ BEGIN
     DECLARE v_dias_atraso INT;
     DECLARE v_valor_multa DECIMAL(10,2);
 
-    -- Busca as datas da locação informada
     SELECT data_prevista_devolucao, data_real_devolucao 
     INTO v_data_prevista, v_data_real
     FROM locacao 
     WHERE id_locacao = p_id_locacao;
 
-    -- Se a locação ainda não foi devolvida (NULL) ou não houve atraso, retorna 0
+    -- Se não houver devolução ou se a entrega foi dentro do prazo, multa é zero
     IF v_data_real IS NULL OR v_data_real <= v_data_prevista THEN
         RETURN 0.00;
     END IF;
 
-    -- Calcula a diferença de dias entre a devolução real e a prevista
+    -- Diferença de dias entre devolução real e prevista
     SET v_dias_atraso = DATEDIFF(v_data_real, v_data_prevista);
 
-    -- Calcula o valor total da multa
-    SET v_valor_multa = v_dias_atraso * p_taxa_diaria_multa;
+    IF v_dias_atraso > 0 THEN
+        SET v_valor_multa = v_dias_atraso * p_taxa_diaria_multa;
+    ELSE
+        SET v_valor_multa = 0.00;
+    END IF;
 
     RETURN v_valor_multa;
-END//
+END //
 
 DELIMITER ;
-
--- Chamada da Function
--- Calcula a multa para a locação ID 2 considerando uma taxa de R$ 50,00 por dia de atraso
-SELECT 
-    id_locacao, 
-    data_prevista_devolucao, 
-    data_real_devolucao, 
-    fn_calcula_multa(id_locacao, 50.00) AS valor_multa
-FROM locacao 
-WHERE id_locacao = 2;
